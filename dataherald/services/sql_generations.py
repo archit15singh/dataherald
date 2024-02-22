@@ -115,29 +115,29 @@ class SQLGenerationService:
                 initial_sql_generation.low_latency_mode = (
                     sql_generation_request.low_latency_mode
                 )
-            try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        self.generate_response_with_timeout,
-                        sql_generator,
-                        prompt,
-                        db_connection,
-                    )
-                    try:
-                        sql_generation = future.result(
-                            timeout=int(os.environ.get("DH_ENGINE_TIMEOUT", 150))
-                        )
-                    except TimeoutError as e:
-                        self.update_error(
-                            initial_sql_generation, "SQL generation request timed out"
-                        )
-                        raise SQLGenerationError(
-                            "SQL generation request timed out",
-                            initial_sql_generation.id,
-                        ) from e
-            except Exception as e:
-                self.update_error(initial_sql_generation, str(e))
-                raise SQLGenerationError(str(e), initial_sql_generation.id) from e
+            # try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.generate_response_with_timeout,
+                    sql_generator,
+                    prompt,
+                    db_connection,
+                )
+                    # try:
+                sql_generation = future.result(
+                    timeout=int(os.environ.get("DH_ENGINE_TIMEOUT", 150))
+                )
+                    # except TimeoutError as e:
+                    #     self.update_error(
+                    #         initial_sql_generation, "SQL generation request timed out"
+                    #     )
+                    #     raise SQLGenerationError(
+                    #         "SQL generation request timed out",
+                    #         initial_sql_generation.id,
+                    #     ) from e
+            # except Exception as e:
+                # self.update_error(initial_sql_generation, str(e))
+                # raise SQLGenerationError(str(e), initial_sql_generation.id) from e
         if sql_generation_request.evaluate:
             evaluator = self.system.instance(Evaluator)
             evaluator.llm_config = (
