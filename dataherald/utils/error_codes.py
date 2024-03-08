@@ -1,4 +1,8 @@
+import logging
+
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 ERROR_MAPPING = {
     "InvalidId": "invalid_object_id",
@@ -18,14 +22,27 @@ ERROR_MAPPING = {
 }
 
 
+class CustomError(Exception):
+    def __init__(self, message, description=None):
+        super().__init__(message)
+        self.description = description
+
+
 def error_response(error, detail: dict, default_error_code=""):
+    error_code = ERROR_MAPPING.get(error.__class__.__name__, default_error_code)
+    description = getattr(error, "description", None)
+    logger.error(
+        f"Error code: {error_code}, message: {error}, description: {description}, detail: {detail}"
+    )
+
+    detail.pop("metadata", None)
+
     return JSONResponse(
         status_code=400,
         content={
-            "error_code": ERROR_MAPPING.get(
-                error.__class__.__name__, default_error_code
-            ),
+            "error_code": error_code,
             "message": str(error),
+            "description": description,
             "detail": detail,
         },
     )
