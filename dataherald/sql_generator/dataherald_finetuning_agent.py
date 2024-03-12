@@ -511,6 +511,7 @@ class DataheraldFinetuningAgent(SQLGenerator):
         vulnerabilities = VulnerabilityRepository(storage)
         cves = self.extract_cve_ids(user_prompt.text)
         extra_info = ""
+        source = ""
         if len(cves) > 0:
             for cve in cves:
                 vulnerability = vulnerabilities.find_by({"cve_id": cve})[0]
@@ -533,7 +534,9 @@ class DataheraldFinetuningAgent(SQLGenerator):
                         extra_info += (
                             f"{cve} was published on {vulnerability.published_date}"
                         )
-        return extra_info
+                    if vulnerability.source:
+                        source = vulnerability.source
+        return extra_info, source
 
     @override
     def generate_response(  # noqa: C901
@@ -612,8 +615,9 @@ class DataheraldFinetuningAgent(SQLGenerator):
         )
         agent_executor.return_intermediate_steps = True
         agent_executor.handle_parsing_errors = ERROR_PARSING_MESSAGE
-        if self.augment_prompt(user_prompt, storage):
-            user_prompt.text += " \n" + self.augment_prompt(user_prompt, storage)
+        cve_augmented, cve_source = self.augment_prompt(user_prompt, storage)
+        if cve_augmented:
+            user_prompt.text += " \n" + cve_augmented
         with get_openai_callback() as cb:
             try:
                 logger.info(f"Prompt: {user_prompt.text}")
@@ -647,6 +651,8 @@ class DataheraldFinetuningAgent(SQLGenerator):
         response.sql = replace_unprocessable_characters(sql_query)
         response.tokens_used = cb.total_tokens
         response.completed_at = datetime.datetime.now()
+        if cve_source:
+            response.metadata.update({"cve_source": cve_source})
         return self.create_sql_query_status(
             self.database,
             response.sql,
