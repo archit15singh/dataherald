@@ -17,7 +17,6 @@ from langchain.callbacks.manager import (
     CallbackManagerForToolRun,
 )
 from langchain.chains.llm import LLMChain
-from langchain.schema import AgentAction
 from langchain.tools.base import BaseTool
 from langchain_community.callbacks import get_openai_callback
 from langchain_openai import OpenAIEmbeddings
@@ -49,6 +48,7 @@ from dataherald.utils.agent_prompts import (
     FORMAT_INSTRUCTIONS,
 )
 from dataherald.utils.models_context_window import OPENAI_FINETUNING_MODELS_WINDOW_SIZES
+from dataherald.utils.timeout_utils import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,16 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
         query = replace_unprocessable_characters(query)
         if "```sql" in query:
             query = query.replace("```sql", "").replace("```", "")
-        return self.db.run_sql(query, top_k=TOP_K)[0]
+
+        try:
+            return run_with_timeout(
+                self.db.run_sql,
+                args=(query,),
+                kwargs={"top_k": TOP_K},
+                timeout_duration=int(os.getenv("SQL_EXECUTION_TIMEOUT", "60")),
+            )
+        except TimeoutError:
+            return "SQL query execution time exceeded, proceed without query execution"
 
     async def _arun(
         self,
@@ -581,7 +590,7 @@ class DataheraldFinetuningAgent(SQLGenerator):
         if not db_scan:
             raise ValueError("No scanned tables found for database")
         few_shot_examples, instructions = context_store.retrieve_context_for_question(
-            user_prompt, number_of_samples=1
+            user_prompt, number_of_samples=5
         )
         finetunings_repository = FinetuningsRepository(storage)
         finetuning = finetunings_repository.find_by_id(self.finetuning_id)
@@ -593,6 +602,18 @@ class DataheraldFinetuningAgent(SQLGenerator):
                 f"Finetuning should have the status {FineTuningStatus.SUCCEEDED.value} to generate SQL queries."
             )
         self.database = SQLDatabase.get_sql_engine(database_connection)
+        for example in few_shot_examples:
+            question = str(example["prompt_text"]).split("Question: ")[0].strip()
+            query = example["sql"].split("SQL: ")[0].strip()
+            if question == user_prompt.text.strip():
+                return SQLGeneration(
+                    prompt_id=user_prompt.id,
+                    tokens_used=0,
+                    completed_at=datetime.datetime.now(),
+                    sql=query,
+                    status="VALID",
+                    metadata={},
+                )
         toolkit = SQLDatabaseToolkit(
             db=self.database,
             instructions=instructions,
@@ -641,12 +662,9 @@ class DataheraldFinetuningAgent(SQLGenerator):
         if "```sql" in result["output"]:
             sql_query = self.remove_markdown(result["output"])
         else:
-            for step in result["intermediate_steps"]:
-                action = step[0]
-                if type(action) == AgentAction and action.tool == "ExecuteQuery":
-                    sql_query = self.format_sql_query(action.tool_input)
-                    if "```sql" in sql_query:
-                        sql_query = self.remove_markdown(sql_query)
+            sql_query = self.extract_query_from_intermediate_steps(
+                result["intermediate"]
+            )
         logger.info(f"cost: {str(cb.total_cost)} tokens: {str(cb.total_tokens)}")
         response.sql = replace_unprocessable_characters(sql_query)
         response.tokens_used = cb.total_tokens
